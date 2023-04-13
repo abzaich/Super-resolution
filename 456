@@ -1,0 +1,87 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision.transforms import Compose, Resize, ToTensor, RandomCrop, RandomHorizontalFlip, RandomVerticalFlip
+
+class SRModule(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(SRModule, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+class SwinSR(nn.Module):
+    def __init__(self):
+        super(SwinSR, self).__init__()
+        self.encoder = nn.Sequential(
+            SRModule(1, 64),
+            SRModule(64, 64),
+            SRModule(64, 64),
+        )
+        self.swin_attention = SwinAttention(64, 8)
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(64, 1, kernel_size=2, stride=2, padding=0),
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = x.view(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
+        x = self.swin_attention(x)
+        x = x.permute(0, 2, 1).view(x.shape[0], x.shape[1], x.shape[2], 1)
+        x = self.decoder(x)
+        return x
+
+def train(model, dataloader, criterion, optimizer, device, scheduler):
+    model.train()
+    running_loss = 0.0
+    for i, data in enumerate(dataloader):
+        lr, hr = data['lr'].to(device), data['hr'].to(device)
+        optimizer.zero_grad()
+
+        sr = model(lr)
+        loss = criterion(sr, hr)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        running_loss += loss.item()
+    return running_loss / len(dataloader)
+
+def main():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Add data augmentation to your dataset loading
+    train_transforms = Compose([
+        RandomCrop(64),
+        RandomHorizontalFlip(),
+        RandomVerticalFlip(),
+        ToTensor(),
+    ])
+    
+    # Load your dataset with the new train_transforms
+    # ...
+
+    model = SwinSR().to(device)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+    
+    num_epochs = 100
+
+    for epoch in range(num_epochs):
+        train_loss = train(model, dataloader, criterion, optimizer, device, scheduler)
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {train_loss:.4f}")
+
+    print("Training completed.")
+
+if __name__ == "__main__":
+    main()
